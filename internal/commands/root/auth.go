@@ -15,6 +15,7 @@
 package root
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"reflect"
@@ -66,12 +67,12 @@ func NewVirtualKubeletAuth(authenticator authenticator.Request, authorizerAttrib
 func BuildAuth(nodeName types.NodeName, client clientset.Interface, config opts.Opts) (AuthInterface, func(<-chan struct{}), error) {
 	// Get clients, if provided
 	var (
-		tokenClient authenticationclient.TokenReviewInterface
-		sarClient   authorizationclient.SubjectAccessReviewInterface
+		tokenClient authenticationclient.AuthenticationV1Interface
+		sarClient   authorizationclient.AuthorizationV1Interface
 	)
 	if client != nil && !reflect.ValueOf(client).IsNil() {
-		tokenClient = client.AuthenticationV1().TokenReviews()
-		sarClient = client.AuthorizationV1().SubjectAccessReviews()
+		tokenClient = client.AuthenticationV1()
+		sarClient = client.AuthorizationV1()
 	}
 
 	authenticator, runAuthenticatorCAReload, err := BuildAuthn(tokenClient, config.Authentication, config.ClientCACert)
@@ -90,7 +91,7 @@ func BuildAuth(nodeName types.NodeName, client clientset.Interface, config opts.
 }
 
 // BuildAuthn creates an authenticator compatible with the virtual-kubelet's needs
-func BuildAuthn(client authenticationclient.TokenReviewInterface, authn opts.Authentication, clientCACert string) (authenticator.Request, func(<-chan struct{}), error) {
+func BuildAuthn(client authenticationclient.AuthenticationV1Interface, authn opts.Authentication, clientCACert string) (authenticator.Request, func(<-chan struct{}), error) {
 	var dynamicCAContentFromFile *dynamiccertificates.DynamicFileCAContent
 	var err error
 	if len(clientCACert) == 0 {
@@ -120,14 +121,24 @@ func BuildAuthn(client authenticationclient.TokenReviewInterface, authn opts.Aut
 	}
 
 	return authenticator, func(stopCh <-chan struct{}) {
+		// generate a context from stopCh. This is to avoid modifying files which are relying on this method
+		// TODO: See if we can pass ctx to the current method
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			select {
+			case <-stopCh:
+				cancel() // stopCh closed, so cancel our context
+			case <-ctx.Done():
+			}
+		}()
 		if dynamicCAContentFromFile != nil {
-			go dynamicCAContentFromFile.Run(1, stopCh)
+			go dynamicCAContentFromFile.Run(ctx, 1)
 		}
 	}, err
 }
 
 // BuildAuthz creates an authorizer compatible with the virtual-kubelet's needs
-func BuildAuthz(client authorizationclient.SubjectAccessReviewInterface, authz opts.Authorization) (authorizer.Authorizer, error) {
+func BuildAuthz(client authorizationclient.AuthorizationV1Interface, authz opts.Authorization) (authorizer.Authorizer, error) {
 	if client == nil {
 		return nil, errors.New("no client provided, cannot use webhook authorization")
 	}

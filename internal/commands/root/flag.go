@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/virtual-kubelet/node-cli/opts"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 func installFlags(flags *pflag.FlagSet, c *opts.Opts) {
